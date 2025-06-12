@@ -16,7 +16,7 @@ import io
 import common
 
 st.set_page_config(
-    page_title="Required columns",
+    page_title="Annotate columns",
     layout="wide",
     page_icon="🧪",
     menu_items={
@@ -246,7 +246,7 @@ button_styles = f"""
     margin: 4px 2px;
     cursor: pointer;
 """
-st.title("""3. Required columns""")
+st.title("""3. Annotate columns""")
 # if df is not in the session state, don't run all the code below
 if "template_df" not in st.session_state:
     st.error("Please fill in the template file in the Home page first", icon="🚨")  
@@ -295,14 +295,10 @@ with st.expander(f"➕ Optional columns (add if relevant)"):
                 st.session_state["template_df"] = df
                 st.rerun()
 
-with st.expander(f"❗ Required columns: {len(empty_columns)}"):
-    for col in empty_columns:
-        st.checkbox(col, value=False, disabled=True)
-
 # ---- STEP 1: Build AgGrid with dynamic column config
 # We'll rebuild builder every time to respect selected column
 selected_column = st.selectbox(
-    "Select a column to annotate:",
+    f"Required columns: select to annotate: {len(empty_columns)}",
     [""] + empty_columns
 )
 

@@ -90,7 +90,7 @@ def edit_mapping_table_aggrid(df, label_options):
                 col,
                 editable=True,
                 cellEditor="agSelectCellEditor",
-                cellEditorParams={"values": [""] + label_options + ["label free sample"]},
+                cellEditorParams={"values": [""] + label_options},
                 cellStyle=cell_style
             )
 
@@ -168,28 +168,23 @@ with st.form("Select here your ontology terms using the autocomplete function or
 
     selected_labels = [lbl.split(',')[-1] for lbl in (return_search + tree_checked) if lbl]
     submitted = st.form_submit_button("Submit selection")
+    st.session_state['selected_labels'] = True
 
-    
-    if submitted:
-        st.session_state["all_selected_labels"] = selected_labels
-        st.write(f"Selection contains: {selected_labels}")
-        
-#Only continue if labels were selected
-if not st.session_state["all_selected_labels"]:
-    st.info("Please select at least one label to proceed.")
-else:
-    st.write("Assign raw files to selected labels. Select ALL if the label is found in all raw files. Unassigned samples will be given the 'label free sample' tag")
-    
-    num_label_cols = len(st.session_state["all_selected_labels"]) + 1
+st.write(selected_labels, submitted)
+if selected_labels in st.session_state():
+    st.session_state["all_selected_labels"] = selected_labels
+    st.write(f"Selection contains: {selected_labels}")
+
+    num_label_cols = len(st.session_state["all_selected_labels"])
     label_column_names = [f"Assigned Label {i+1}" for i in range(num_label_cols)]
-        # Initialize selected files per label in session state
+    file_names = template_df[COMMENT_DATA_FILE_COL].tolist()
     # Create mapping table: each file = row; assigned label = editable dropdown
     if "mapping_table" not in st.session_state:
         initial_data = {
-            "File name": template_df[COMMENT_DATA_FILE_COL]
+            "File name": file_names
         }
         for col in label_column_names:
-            initial_data[col] = [""] * len(template_df[COMMENT_DATA_FILE_COL].values.tolist())
+            initial_data[col] = [""] * len(file_names)
         st.session_state["mapping_table"] = pd.DataFrame(initial_data)
     column_config = {
     "File name": st.column_config.Column(
@@ -226,3 +221,6 @@ else:
         st.success("Labels applied to SDRF.")
         st.write("Updated SDRF file:")
         st.dataframe(updated_df, use_container_width=True)
+else:
+    st.write('no selection')
+    
