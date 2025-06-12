@@ -215,6 +215,8 @@ def edit_mapping_table_aggrid(df, label_options):
     )
 
     return grid_return["data"]
+st.set_page_config(page_title="Flexible SDRF Generator", layout="wide")
+st.title("🧪 Flexible SDRF Generator")
 
 # Load data dictionary and validators
 if "data_dict" not in st.session_state:
@@ -226,8 +228,7 @@ else:
     data_dict = st.session_state["data_dict"]
     unimod = st.session_state["unimod"]
 
-st.set_page_config(page_title="Flexible SDRF Generator", layout="wide")
-st.title("🧪 Flexible SDRF Generator")
+
 
 # --- Step 0: Choose Template ---
 local_dir = os.path.dirname(os.path.dirname(__file__))
