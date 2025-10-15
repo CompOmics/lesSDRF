@@ -184,15 +184,14 @@ if selected_species != "":
             value=1,
             help="Choose how many empty rows to create in your template (maximum 500)"
         )
-        if st.button("Create template"):
-            # Create empty DataFrame with n rows
-            template_df = pd.DataFrame(
-                np.nan, 
-                index=range(n_rows),
-                columns=template_df.columns
-            )
-            st.write(f"Created template with {n_rows} empty rows")
-            st.session_state["template_df"] = template_df
+        # Create empty DataFrame with n rows
+        template_df = pd.DataFrame(
+            np.nan, 
+            index=range(n_rows),
+            columns=template_df.columns
+        )
+        st.write(f"Created template with {n_rows} empty rows")
+        st.session_state["template_df"] = template_df
 
     ## Show the data in a table
     st.write(template_df)
