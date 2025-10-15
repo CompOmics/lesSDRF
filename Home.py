@@ -141,29 +141,58 @@ if selected_species != "":
     template_df["comment[fragment mass tolerance]"] = np.nan
     template_df["comment[precursor mass tolerance]"] = np.nan
 
-    # Ask user to upload filenames of their samples
-    filenames = []
-    uploaded_names = st.text_input("Input raw file names as a comma or tab separated list", help="The raw file names will be input in the comment[data file] column and are the basis of your SDRF file. Input maximum 500 raw files")
-    if uploaded_names is not None:
-        #if comma separated, split on comma, if tab separated, split on tab
-        if "," in uploaded_names:
-            uploaded_names = uploaded_names.split(",")
-        elif "\t" in uploaded_names:
-            uploaded_names = uploaded_names.split("\t")
-        elif " " in uploaded_names:
-            uploaded_names = uploaded_names.split(" ")
-        else:
-            uploaded_names = [uploaded_names]
-        #remove trailing and leading spaces
-        uploaded_names = [name.strip() for name in uploaded_names]
-        filenames.append(uploaded_names)
-    if len(filenames[0]) > 500:
-        st.error('Too many samples, please upload a maximum of 500 samples')
-    else:
-        st.write(f"Added filenames: {filenames[0]}")
-        ## Store filenames in the dataframe
-        template_df["comment[data file]"] = filenames[0]
-        st.session_state["template_df"] = template_df
+    # Add radio button to choose between methods
+    input_method = st.radio(
+        "Choose how to create your template:",
+        ["Input raw file names", "Create empty rows"]
+    )
+
+    if input_method == "Input raw file names":
+        # Ask user to upload filenames of their samples
+        filenames = []
+        uploaded_names = st.text_input(
+            "Input raw file names as a comma or tab separated list", 
+            help="The raw file names will be input in the comment[data file] column and are the basis of your SDRF file. Input maximum 500 raw files"
+        )
+        if uploaded_names is not None:
+            #if comma separated, split on comma, if tab separated, split on tab
+            if "," in uploaded_names:
+                uploaded_names = uploaded_names.split(",")
+            elif "\t" in uploaded_names:
+                uploaded_names = uploaded_names.split("\t")
+            elif " " in uploaded_names:
+                uploaded_names = uploaded_names.split(" ")
+            else:
+                uploaded_names = [uploaded_names]
+            #remove trailing and leading spaces
+            uploaded_names = [name.strip() for name in uploaded_names]
+            filenames.append(uploaded_names)
+
+        if filenames and len(filenames[0]) > 500:
+            st.error('Too many samples, please upload a maximum of 500 samples')
+        elif filenames:
+            st.write(f"Added filenames: {filenames[0]}")
+            ## Store filenames in the dataframe
+            template_df["comment[data file]"] = filenames[0]
+            st.session_state["template_df"] = template_df
+
+    else:  # Create empty rows
+        n_rows = st.number_input(
+            "Number of empty rows to create",
+            min_value=1,
+            max_value=500,
+            value=1,
+            help="Choose how many empty rows to create in your template (maximum 500)"
+        )
+        if st.button("Create template"):
+            # Create empty DataFrame with n rows
+            template_df = pd.DataFrame(
+                np.nan, 
+                index=range(n_rows),
+                columns=template_df.columns
+            )
+            st.write(f"Created template with {n_rows} empty rows")
+            st.session_state["template_df"] = template_df
 
     ## Show the data in a table
     st.write(template_df)
