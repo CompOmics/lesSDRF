@@ -1,16 +1,21 @@
-import pronto
-from pronto import Ontology
-from collections import defaultdict
-import json
 import gzip
+import json
+import os
 import pickle
-import streamlit as st
+import re
+import subprocess
+import tempfile
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
-import re
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+import pronto
+import streamlit as st
+from pronto import Ontology
+from st_aggrid import (AgGrid, DataReturnMode, GridOptionsBuilder,
+                       GridUpdateMode)
 from streamlit_tree_select import tree_select
-import subprocess
+
 
 def help():
     """This module contains all parsable functions necessary to build the SDRF GUI"""
@@ -277,7 +282,7 @@ def multiple_ontology_tree(column, element_list, nodes, df, multiple_in_one = Fa
 
     else:
         df.fillna("empty", inplace=True)
-        st.write(f"If all cells are correctly filled in click twice on the update button")
+        st.write("If all cells are correctly filled in click twice on the update button")
         cell_style = {"background-color": "#ffa478"}
         builder = GridOptionsBuilder.from_dataframe(df)
         builder.configure_columns(columns_to_adapt,editable=True,cellEditor="agSelectCellEditor",cellEditorParams={"values": all},cellStyle=cell_style)
@@ -403,9 +408,11 @@ def convert_df(df):
     df.columns = [re.sub(r"(_\d+)", "", i) for i in df.columns]
     #remove leading and trailing whitespaces from all columns
     df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
-    file_path = "temp_sdrf.tsv"
+
+    _, file_path = tempfile.mkstemp()
     df.to_csv(file_path, index=False, sep="\t", encoding="utf-8")
     is_valid, message = validate_sdrf(file_path)
+    os.remove(file_path)
 
     if is_valid is None:
         st.error(message)
