@@ -1,240 +1,351 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import re
-import ParsingModule
-import warnings
-warnings.filterwarnings("ignore")
-from PIL import Image
-import base64
+import html
 import io
+import re
 
-    
-st.set_page_config(
-    page_title="Map local metadata",
-    layout="wide",
-    page_icon="🧪",
-    menu_items={
-        "Get help": "https://github.com/compomics/lesSDRF/issues",
-        "Report a bug": "https://github.com/compomics/lesSDRF/issues",
-    },
-)
+import pandas as pd
+import streamlit as st
 
-def add_logo(logo_path, width, height):
-    """Read and return a resized logo"""
-    logo = Image.open(logo_path)
-    modified_logo = logo.resize((width, height))
-    return modified_logo
+import app_utils as au
+import spec
+import textmining as tm
 
-def get_base64_image(image):
-    img_buffer = io.BytesIO()
-    image.save(img_buffer, format="PNG")
-    img_str = base64.b64encode(img_buffer.getvalue()).decode()
-    return img_str
-
-my_logo = add_logo(logo_path="final_logo.png", width=149, height=58)
-
-st.markdown(
-    f"""
-    <style>
-        [data-testid="stSidebarNav"] {{
-            background-image: url('data:image/png;base64,{get_base64_image(my_logo)}');
-            background-repeat: no-repeat;
-            background-position: 40px 20px;
-        }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
+au.setup_page("Map local metadata")
 st.title("1. Map local metadata to SDRF")
-st.markdown(
-    """If you have a local metadata file available, you can use this file to map the data to the required SDRF information. """
-)
-st.markdown(
-    """**Important:** you can upload the file in csv, tsv or xlsx format.  
-The order of your raw file names should match the order in which you inputted them in the previous step"""
-)
+st.markdown("""If you have a local metadata sheet or a methods section describing your experiment, you can use it to
+fill in the SDRF. Values are checked against the SDRF rules: ontology columns must contain ontology terms, age must be
+written like `45Y`, sex as `male`/`female`, and so on.""")
+
+df = au.require_df()
+au.show_df(df)
+au.sidebar_export()
 
 
+# ======================================================================================
+# From a metadata sheet
+# ======================================================================================
+@st.cache_data(show_spinner=False, max_entries=3)
+def read_sheet(data: bytes, name: str) -> pd.DataFrame:
+    ext = name.rsplit(".", 1)[-1].lower()
+    if ext == "xlsx":
+        return pd.read_excel(io.BytesIO(data), dtype=str)
+    sep = "," if ext == "csv" else "\t"
+    return pd.read_csv(io.BytesIO(data), sep=sep, dtype=str, keep_default_na=False)
 
 
-data_dict = st.session_state["data_dict"]
+def check_values(column: str, values: list) -> tuple[list, list]:
+    """Normalise values for an SDRF column. Returns (new values, invalid values)."""
+    rule = spec.rule_for(column, spec.selected_templates())
+    base = spec.base_name(column)
+    reserved = {w.lower(): w for w in rule.reserved_words}
+    out, bad = [], []
+    for v in values:
+        if spec.is_empty_value(v):
+            out.append(None)
+            continue
+        v = str(v).strip()
+        new = reserved.get(v.lower())
+        if new is None:
+            if base == "characteristics[organism]":
+                new = au.find_organism(v)
+            elif base == "characteristics[sex]":
+                new = spec.SEX_ALIASES.get(v.lower())
+                new = new if new and (not rule.values or new in rule.values or new in reserved.values()) else None
+            elif base == "characteristics[age]":
+                new = spec.clean_age(v) if spec.check_age(spec.clean_age(v)) else None
+            elif base in au.ONTOLOGY_COLUMNS:
+                new = au.canonical_term(au.ONTOLOGY_COLUMNS[base][0], v)
+                new = au.with_accession(base, new) if new else None
+            elif rule.values:
+                new = next((x for x in rule.values if x.lower() == v.lower()), None)
+            elif base in ("characteristics[biological replicate]", "comment[technical replicate]",
+                          "comment[fraction identifier]"):
+                new = v if v.isdigit() else None
+            else:
+                new = v
+        if new is None:
+            bad.append(v)
+        out.append(new)
+    return out, bad
 
-# if template_df is not in the session state, don't run all the code below
-if "template_df" not in st.session_state:
-    st.error("Please fill in the template file in the Home page first", icon="🚨")  
-    st.stop()
-else:
-    template_df = st.session_state["template_df"] 
-    st.write("**This is your current SDRF file.**")
-    st.write(template_df)
 
-with st.sidebar:
-    download = st.download_button("Press to download SDRF file",ParsingModule.convert_df(template_df), "intermediate_SDRF.sdrf.tsv", help="download your SDRF file")
-    st.write("""Please refer to your data and lesSDRF within your manuscript as follows:
-                 *The experimental metadata has been generated using lesSDRF and is available through ProteomeXchange with the dataset identifier [PXDxxxxxxx]*""")
-# Ask the user to upload their own metadata file and to map it to the columns of the template file
-metadata_sheet = st.file_uploader(
-    "Upload your local metadata file (.csv, .tsv or .xls)", type=["csv", "tsv", "xlsx"]
-)
-if metadata_sheet is not None:
-    file_extension = metadata_sheet.name.split(".")[-1]
-    if file_extension == "csv":
-        metadata_df = pd.read_csv(metadata_sheet)
-    elif file_extension == "tsv":
-        metadata_df = pd.read_csv(metadata_sheet, sep="\t")
-    elif file_extension == "xlsx":
-        metadata_df = pd.read_excel(metadata_sheet)
+def sheet_tab():
+    sheet = st.file_uploader("Upload your local metadata file", type=["csv", "tsv", "txt", "xlsx"])
+    if sheet is None:
+        return
+    try:
+        meta = spec.normalize_df(read_sheet(sheet.getvalue(), sheet.name))
+    except Exception as exc:
+        st.error(f"Could not read this file: {exc}")
+        return
     st.write("Your metadata file:")
-    st.dataframe(metadata_df)
-    if "metadata_df" not in st.session_state:
-        st.session_state["metadata_df"] = metadata_df
-    # Check for potential mismatch in number of samples
-    if metadata_df.shape[0] != template_df.shape[0]:
-        st.error(
-            "There is a mismatch in the number of uploaded files and the number of files in the metadata sheet",
-            icon="🚨",
-        )
+    st.dataframe(meta, hide_index=True, height=200)
+
+    # How do metadata rows correspond to SDRF rows?
+    key_options = ["(same row order as the SDRF)"] + list(meta.columns)
+    key_col = st.selectbox("Which column in your file contains the raw file names?", key_options,
+                           help="Rows are matched on comment[data file]. Without such a column, rows are matched by order.")
+    if key_col == key_options[0]:
+        if len(meta) != len(df):
+            st.error(f"Your file has {len(meta)} rows and the SDRF has {len(df)}; "
+                     "select the column with raw file names.")
+            return
+        aligned = meta.reset_index(drop=True)
+    else:
+        lookup = meta.drop_duplicates(key_col).set_index(key_col)
+        files = df.get("comment[data file]", pd.Series([None] * len(df)))
+        missing = [f for f in files if f not in lookup.index]
+        if missing:
+            st.warning(f"{len(missing)} SDRF row(s) have no match in your file, e.g. {missing[:3]}; "
+                       "they stay unchanged.")
+        aligned = lookup.reindex(files.tolist()).reset_index(drop=True)
+        aligned[key_col] = files.tolist()
+
+    st.subheader("Map columns")
+    targets = list(dict.fromkeys(spec.all_columns(spec.selected_templates()) + list(df.columns)))
+    targets = [t for t in targets if t not in spec.METADATA_COLUMNS]
+    pairs = st.session_state.setdefault("mapping_pairs", [])
+    c1, c2, c3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+    with c1:
+        src = st.selectbox("Column in your file", [""] + list(meta.columns))
+    with c2:
+        dst = st.selectbox("SDRF column", [""] + targets)
+    with c3:
+        check = st.button("Check", type="primary", disabled=not (src and dst))
+
+    if check:
+        values, bad = check_values(dst, aligned[src].tolist())
+        st.session_state["mapping_check"] = {"src": src, "dst": dst, "values": values, "bad": sorted(set(bad))}
+
+    result = st.session_state.get("mapping_check")
+    if result and result["src"] in aligned.columns:
+        if result["bad"]:
+            st.error(f"{len(result['bad'])} value(s) of **{result['src']}** are not valid for **{result['dst']}**: "
+                     + ", ".join(f"`{b}`" for b in result["bad"][:20])
+                     + ". Fix them in your file, or fill this column in step 3/4 by picking terms from the ontology.",
+                     icon="❌")
+        else:
+            preview = sorted({v for v in result["values"] if v})[:10]
+            st.success(f"All values of **{result['src']}** are valid for **{result['dst']}**, e.g. "
+                       + ", ".join(f"`{p}`" for p in preview), icon="✅")
+            if st.button(f"Write to {result['dst']}"):
+                new = au.ensure_columns(au.get_df(), [result["dst"]])
+                old = new[result["dst"]].tolist()
+                new[result["dst"]] = [v if v is not None else o for v, o in zip(result["values"], old)]
+                au.save_df(new)
+                pairs.append(f"{result['src']} → {result['dst']}")
+                st.session_state["mapping_check"] = None
+                st.rerun()
+
+    if pairs:
+        st.write("Mapped so far: " + " · ".join(pairs))
 
 
-    meta_columns = list(metadata_df.columns)
-    template_columns = [
-        "source name", "assay name", "technology type", "characteristics[age]",
-        "characteristics[ancestry category]",
-        "characteristics[biological replicate]",
-        "characteristics[cell line]",
-        "characteristics[cell type]",
-        "characteristics[developmental stage]",
-        "characteristics[disease]",
-        "characteristics[individual]",
-        "characteristics[organism part]",
-        "characteristics[organism]",
-        "characteristics[sex]",
-        "characteristics[enrichment process",
-        "characteristics[compound]",
-        "characteristics[concentration of compound]",
-        "comment[modification parameters]",
-        "comment[cleavage agent details]",
-        "comment[data file]",
-        "comment[fraction identifier]",
-        "comment[fractionation method]",
-        "comment[instrument]",
-        "comment[label]",
-        "comment[technical replicate]",
-        "comment[fragment mass tolerance]",
-        "comment[precursor mass tolerance]",
-        "comment[dissociation method]",
-        "characteristics[spiked compound]",
-        "characteristics[synthetic peptide]",
-        "characteristics[phenotype]",
-        "comment[depletion]",
-    ]
-    value_columns=["source name", "assay name", "comment[data file]","comment[fraction identifier]","comment[technical replicate]"]
-    other_columns = ["characteristics[sex]", "characteristics[age]"]
+# ======================================================================================
+# From methods text
+# ======================================================================================
+STATUS_LABELS = {"pending": "to review", "accepted": "accepted", "declined": "declined"}
+# Columns whose values are picked from a list in step 3; several accepted values are pre-selected there.
+PICKER_COLUMNS = set(au.ONTOLOGY_COLUMNS) | {"characteristics[organism]", "comment[cleavage agent details]",
+                                             "comment[proteomics data acquisition method]"}
 
-    # First narrow down the columns in the metadata file that are useful to match to the SDRF file
-    sel, subm = st.columns(2)
-    with sel:
-        columns_to_match = st.multiselect(
-            "Select columns containing data that will be used in the SDRF data",
-            meta_columns,
-        )
-    with subm:
-        submitbox = st.checkbox('Ready to match?')
-    mismatches = []
-    if submitbox:  
-        col1, col2, col3, col4 = st.columns(4)
+HIGHLIGHT_CSS = """
+<style>
+  body { margin: 0; font-family: "Source Sans Pro", "Segoe UI", sans-serif; font-size: 15px; line-height: 1.65;
+         color: #262730; background: #ffffff; }
+  .text { white-space: pre-wrap; padding: 12px 16px; }
+  mark { border-radius: 3px; padding: 0 2px; cursor: help; }
+  mark.pending { background: #fff1b8; }
+  mark.accepted { background: #c8ecd0; }
+  mark.declined { background: #ececec; color: #8a8a8a; text-decoration: line-through; }
+  mark.focus { background: #f79646; color: #ffffff; font-weight: 600; }
+</style>
+"""
 
-        selected_col = None
-        matched_col = None
-        for i in range(len(columns_to_match)):
-            if not selected_col:
-                with col1:
-                    selected_col = st.selectbox(
-                        f"Select column {i+1} to match in your metadata file:",
-                        [""] + columns_to_match,
-                        index=0,
-                        key=f"selected_col{i}",
-                    )
-            if selected_col and not matched_col:
-                with col2:
-                    matched_col = st.selectbox(
-                        f"Select the corresponding column from the SDRF file:",
-                        ["", None] + template_columns,
-                        index=0,
-                        key=f"matched_col{i}",
-                    )
-                with col3:
-                    check = st.checkbox("Match and check ontology", key=f"check{i}")
-                    st.write(" ")
-                    st.write(" ")
-                    st.write(" ")
-                    if matched_col != None and check:
-                        input_values = metadata_df[selected_col].unique()
-                        input_values = [ i for i in input_values if i is not np.nan]
-                        name = (matched_col.split('[')[-1].split(']')[0]).replace(' ', '_')
-                        name = 'all_' + name + '_elements'
-                        if matched_col in value_columns:
-                                with col4:
-                                    st.success('Great! The local metadata values are valid terms and are mapped to the SDRF file.', icon="✅")
-                                template_df[matched_col] = metadata_df[selected_col]
-                        elif matched_col in other_columns:
-                            if matched_col == "characteristics[age]":
-                                with col4:
-                                    if ParsingModule.check_age_format(template_df, "characteristics[age]") == False:
-                                        st.error("The age column is not in the correct format, please check and try again")
-                                    elif ParsingModule.check_age_format(template_df, "characteristics[age]") == True:
-                                        st.success('Great! The local metadata values are valid terms and are mapped to the SDRF file.', icon="✅")
-                                        template_df[matched_col] = metadata_df[selected_col] 
-                            if matched_col == "characteristics[sex]":
-                                #check if input_values only contains M, F or NA and no other strings or numbers
-                                if all(x in ['M', 'F', 'NA'] for x in input_values):
-                                    with col4:
-                                        st.success('Great! The local metadata values are valid terms and are mapped to the SDRF file.', icon="✅")
-                                    template_df[matched_col] = metadata_df[selected_col] 
-                                else:
-                                    with col4:
-                                        st.error("The sex column is not in the correct format. It should indiciate M, F or NA, please check and try again")
 
-                        elif (matched_col not in value_columns) and name not in data_dict:
-                            with col4: 
-                                st.error("This column does not contain ontology-based terms so this column cannot be matched. Please fill it in using the next steps in the sidebar")
+def render_highlights(text: str, hits: list[dict], status: dict, focus: set) -> str:
+    """The text as HTML, with every suggestion's mentions highlighted (focused suggestions in orange)."""
+    by_span: dict[tuple, list[dict]] = {}
+    for h in hits:
+        for a, b in h["spans"]:
+            by_span.setdefault((a, b), []).append(h)
+    # Place focused spans first so overlapping matches never hide them, then longer before shorter.
+    order = sorted(by_span, key=lambda s: (not any(h["id"] in focus for h in by_span[s]), -(s[1] - s[0]), s[0]))
+    placed: list[tuple[int, int]] = []
+    for a, b in order:
+        if all(b <= x or a >= y for x, y in placed):
+            placed.append((a, b))
+    placed.sort()
+    out, pos = [], 0
+    for a, b in placed:
+        group = by_span[(a, b)]
+        if any(h["id"] in focus for h in group):
+            cls = "focus"
+        else:
+            states = {status.get(h["id"], "pending") for h in group}
+            cls = "accepted" if "accepted" in states else "pending" if "pending" in states else "declined"
+        title = "\n".join(f"{h['column']}: {h['value']} ({h['confidence']:.0%}, "
+                          f"{STATUS_LABELS[status.get(h['id'], 'pending')]})" for h in group)
+        out.append(html.escape(text[pos:a]))
+        out.append(f'<mark class="{cls}" title="{html.escape(title)}">{html.escape(text[a:b])}</mark>')
+        pos = b
+    out.append(html.escape(text[pos:]))
+    script = "<script>const f=document.querySelector('mark.focus');if(f){f.scrollIntoView({block:'center'});}</script>"
+    return HIGHLIGHT_CSS + f'<div class="text">{"".join(out)}</div>' + script
 
-                        else:
-                            onto_elements = data_dict[name]
-                            if matched_col == "characteristics[organism]":
-                                map_organism_dict = {'Homo sapiens': ['Human', 'human', 'homo sapiens', 'Homo Sapiens'], 
-                                'Mus musculus': ['mouse', 'Mouse', 'Mus Musculus', 'mus musculus'],
-                                'Arabidopsis thaliana': ['arabidopsis thaliana', 'Arabidopsis Thaliana', 'arabidopsis', 'Arabidopsis', 'thale cress'], 
-                                'Drosophila melanogaster': ['drosophila', 'Drosophila', 'Drosophila Melanogsaster', 'drosophila melanogaster', 'fruitfly', 'fruit fly'],
-                                'Saccharomyces cerevisiae':['Saccharomyces Cerevisiae', 'saccharomyces cerevisiae', "brewer's yeast", "Brewer's yeast"],
-                                'Caenorhabditis elegans':['C. Elegans', 'C. elegans', 'c. elegans', 'caenorhabditis elegans', 'Caenorhabditis Elegans', 'worm', 'Worm'],
-                                'Danio rerio':['Danio Rerio', 'danio rerio', 'zebrafish', 'Zebrafish'],
-                                'Escherichia coli': ['E. Coli', 'E. coli', 'e. coli', 'Escherichia Coli', 'escherichia coli']}
-                                #dictionary containing the 3 most occuring organisms and all the ways they could be written
-                                # if the input value contains one of the values in the list, it will be replaced by the key
-                                # the value in the dataframe will be replaced by the key
-                                for key, value in map_organism_dict.items():
-                                    for i in input_values:
-                                        if i in value:
-                                            metadata_df[selected_col].replace(i, key, inplace=True)
-                                            input_values[input_values.index(i)] = key                            
-                            if not set(input_values).issubset(set(onto_elements)):
-                                not_in_onto = set(input_values) - set(onto_elements)
-                                mismatches.append(not_in_onto)
-                                with col4: 
-                                    st.error(f'{not_in_onto} are not ontology terms. Select the correct terms in the next steps directly from the ontology', icon="❌")
 
-                            elif (set(input_values).issubset(set(onto_elements))) and (len(input_values)>=1):
-                                with col4: 
-                                    st.success('Great! The local metadata values are valid terms and are mapped to the SDRF file.' , icon="✅")
-                                template_df[matched_col] = metadata_df[selected_col]
-                        if matched_col == None:
-                            with col4:
-                                st.write("Skip this column")
-                columns_to_match = [col for col in columns_to_match if col != selected_col]
-                template_columns = [col for col in template_columns if col != matched_col]
-                selected_col = None
-                matched_col = None
+def apply_accepted(hits: list[dict], overwrite: bool) -> list[str]:
+    """Write accepted suggestions into the SDRF. Returns a summary of what happened."""
+    df = au.get_df()
+    messages = []
+    grouped: dict[str, list[str]] = {}
+    for h in hits:
+        grouped.setdefault(h["column"], []).append(h["value"])
+    for column, values in grouped.items():
+        values = list(dict.fromkeys(values))
+        filled = [c for c in df.columns if spec.base_name(c) == column and not spec.is_empty_column(df, c)]
+        if filled and not overwrite:
+            messages.append(f"Skipped **{column}**: already filled in (tick *Overwrite* to replace it).")
+            continue
+        if column == "comment[modification parameters]":
+            df = df.drop(columns=[c for c in df.columns if spec.base_name(c) == column])
+            cols = au.copy_columns(column, len(values))
+            df = au.ensure_columns(df, cols)
+            for c, v in zip(cols, values):
+                df[c] = v
+            messages.append(f"Wrote {len(values)} modification(s) to **{column}**.")
+        elif column == "comment[collision energy]":
+            df = au.ensure_columns(df, [column])
+            df[column] = ";".join(values)
+            messages.append(f"Filled **{column}** with `{';'.join(values)}`.")
+        elif column == "comment[label]" and values != ["label free sample"]:
+            st.session_state["sel_labeling"] = [v for v in values if v != "label free sample"]
+            messages.append(f"Pre-selected {len(values)} label(s) in **step 2 (Labeling)**, where every file is "
+                            "split into one row per label.")
+        elif len(values) == 1:
+            df = au.ensure_columns(df, [column])
+            df[column] = au.with_accession(column, values[0])
+            messages.append(f"Filled **{column}** with `{values[0]}`.")
+        elif column in PICKER_COLUMNS:
+            key = re.sub(r"\W+", "_", column)
+            st.session_state[f"sel_{key}"] = values
+            messages.append(f"Pre-selected {len(values)} values for **{column}** in step 3/4: assign them to the "
+                            "right rows there (e.g. with *Apply to: rows whose comment[data file] contains ...*).")
+        else:
+            messages.append(f"**{column}** has {len(values)} accepted values ({', '.join(values)}); "
+                            "fill it per row in step 3/4.")
+    au.save_df(df)
+    return messages
+
+
+def text_tab():
+    st.write("""Paste the methods section of your manuscript (or any description of the experiment). lesSDRF looks for
+    organisms, tissues, diseases, cell lines, instruments, enzymes, modifications, labels, mass tolerances and more,
+    using the ontologies built into the app. Nothing leaves the app and nothing is written to your SDRF until you
+    accept it.""")
+    upload = st.file_uploader("Or upload a text file", type=["txt", "md"], key="tm_file")
+    default = upload.getvalue().decode("utf-8", errors="ignore") if upload is not None else ""
+    text = st.text_area("Methods text", value=default, height=200, key=f"tm_text_{upload.name if upload else ''}",
+                        placeholder="e.g. Proteins were reduced with DTT, alkylated with iodoacetamide and digested "
+                                    "with trypsin. Peptides were analysed on a Q Exactive HF ...")
+    if st.button("Find metadata", type="primary", disabled=not (text and text.strip())):
+        with st.spinner("Searching the text..."):
+            result = tm.extract(text)
+        st.session_state["tm_result"] = result
+        st.session_state["tm_status"] = {}
+        st.session_state["tm_messages"] = []
+
+    result = st.session_state.get("tm_result")
+    if not result:
+        return
+    hits = result["hits"]
+    status: dict = st.session_state.setdefault("tm_status", {})
+    if not hits:
+        st.info("No metadata found in this text.")
+        return
+
+    # ---- filters and bulk actions ------------------------------------------------------
+    st.subheader(f"{len(hits)} suggestions")
+    c1, c2, c3 = st.columns([2, 2, 2], vertical_alignment="bottom")
+    with c1:
+        columns = list(dict.fromkeys(h["column"] for h in hits))
+        only = st.multiselect("Show SDRF columns", columns, placeholder="All columns", key="tm_filter_cols")
+    with c2:
+        show = st.segmented_control("Show", ["all", "to review", "accepted", "declined"], default="all",
+                                    key="tm_filter_status")
+    with c3:
+        threshold = st.slider("Accept all suggestions with a confidence of at least", 0.0, 1.0, 0.7, 0.05,
+                              format="%.2f", key="tm_threshold")
+    visible = [h for h in hits
+               if (not only or h["column"] in only)
+               and (show in (None, "all") or STATUS_LABELS[status.get(h["id"], "pending")] == show)]
+
+    table = pd.DataFrame([{
+        "status": STATUS_LABELS[status.get(h["id"], "pending")],
+        "SDRF column": h["column"],
+        "value": h["value"],
+        "confidence": h["confidence"],
+        "mentions": h["count"],
+        "found as": h["found"] or "(inferred)",
+    } for h in visible])
+
+    left, right = st.columns([5, 4])
+    with left:
+        st.caption("Select rows to highlight them in the text, then accept or decline them.")
+        # The selection is stored per row number: a new key whenever the rows change (filter, accept, decline)
+        # makes sure an old selection never lands on other suggestions.
+        table_key = "tm_table_" + str(abs(hash(tuple((h["id"], status.get(h["id"], "")) for h in visible))))
+        event = st.dataframe(
+            table, hide_index=True, on_select="rerun", selection_mode="multi-row", key=table_key, height=460,
+            column_config={
+                "confidence": st.column_config.ProgressColumn("confidence", min_value=0.0, max_value=1.0,
+                                                              format="percent", color="#f79646"),
+                "mentions": st.column_config.NumberColumn("mentions", width="small"),
+            })
+        selected = [visible[i]["id"] for i in event.selection.rows if i < len(visible)]
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            if st.button("Accept", type="primary", disabled=not selected, key="tm_accept"):
+                status.update({i: "accepted" for i in selected})
+                st.rerun()
+        with b2:
+            if st.button("Decline", disabled=not selected, key="tm_decline"):
+                status.update({i: "declined" for i in selected})
+                st.rerun()
+        with b3:
+            if st.button(f"Accept all ≥ {threshold:.0%}", key="tm_accept_all"):
+                status.update({h["id"]: "accepted" for h in visible if h["confidence"] >= threshold
+                               and status.get(h["id"], "pending") == "pending"})
+                st.rerun()
+        with b4:
+            if st.button("Reset", key="tm_reset"):
+                status.clear()
+                st.rerun()
+        if selected:
+            for h in [h for h in hits if h["id"] in selected][:3]:
+                st.caption(f"**{h['column']}: {h['value']}** — {h['evidence']}")
+    with right:
+        st.caption("Highlights: yellow = to review, green = accepted, grey = declined, orange = selected. "
+                   "Hover a highlight for details.")
+        # All user text is HTML-escaped in render_highlights, so pasted text cannot inject markup.
+        st.iframe(render_highlights(result["text"], visible, status, set(selected)), height=520)
+
+    # ---- write to the SDRF ---------------------------------------------------------
+    accepted = [h for h in hits if status.get(h["id"]) == "accepted"]
+    st.divider()
+    c4, c5 = st.columns([3, 2], vertical_alignment="center")
+    with c4:
+        overwrite = st.checkbox("Overwrite columns that are already filled in", key="tm_overwrite")
+    with c5:
+        if st.button(f"Write {len(accepted)} accepted suggestion(s) to the SDRF", type="primary",
+                     disabled=not accepted, key="tm_apply"):
+            st.session_state["tm_messages"] = apply_accepted(accepted, overwrite)
+            st.rerun()
+    for message in st.session_state.get("tm_messages", []):
+        st.write("- " + message)
+
+
+sheet_ui, text_ui = st.tabs(["From a metadata sheet", "From methods text"])
+with sheet_ui:
+    sheet_tab()
+with text_ui:
+    text_tab()

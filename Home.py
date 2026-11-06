@@ -1,203 +1,152 @@
-import streamlit as st
-import pandas as pd
-import re
-import numpy as np
-
-import ParsingModule
-import warnings
-warnings.filterwarnings("ignore")
 import os
-import json
-import gzip
-local_dir = os.path.dirname(__file__)
-from PIL import Image
-import base64
-import io
-st.set_page_config(
-    page_title="lesSDRF",
-    layout="wide",
-    menu_items={
-        "Get help": "https://github.com/compomics/lesSDRF/issues",
-        "Report a bug": "https://github.com/compomics/lesSDRF/issues",
-    },
-)
+import re
 
-def add_logo(logo_path, width, height):
-    """Read and return a resized logo"""
-    logo = Image.open(logo_path)
-    modified_logo = logo.resize((width, height))
-    return modified_logo
+import pandas as pd
+import streamlit as st
 
-def get_base64_image(image):
-    img_buffer = io.BytesIO()
-    image.save(img_buffer, format="PNG")
-    img_str = base64.b64encode(img_buffer.getvalue()).decode()
-    return img_str
+import app_utils as au
+import spec
 
-my_logo = add_logo(logo_path="final_logo.png", width=149, height=58)
+au.setup_page("lesSDRF", icon=None)
 
-st.markdown(
-    f"""
-    <style>
-        [data-testid="stSidebarNav"] {{
-            background-image: url('data:image/png;base64,{get_base64_image(my_logo)}');
-            background-repeat: no-repeat;
-            background-position: 40px 20px;
-        }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-#get local directory using os, and add the data folder to the path
-
-
-
-# use streamlit cache data to load gzipped jsons files from folder
-@st.cache_data
-def load_data():
-    local_dir = os.path.dirname(__file__)
-    folder_path = os.path.join(local_dir, "data")
-    unimod_path = os.path.join(local_dir, "ontology", "unimod.csv")
-    data = {}
-    for filename in os.listdir(folder_path):
-        # do not load the files containing the following names: archae, bacteria, eukaryota, virus, unclassified, other sequences
-        if re.search(r"archaea|bacteria|eukaryota|virus|unclassified|other sequences", filename):
-            continue
-        file_path = os.path.join(folder_path, filename)
-        if filename.endswith(".json.gz"):
-            try:
-                with gzip.open(file_path, "rb") as f:
-                    try:
-                        json_bytes = f.read()
-                        json_str = json_bytes.decode('utf-8')
-                        file_data = json.loads(json_str)
-                        filename_key = filename.replace(".json.gz", "")
-                        data[filename_key] = file_data
-                    except json.JSONDecodeError:
-                        st.write(f"Error decoding JSON in file {file_path}")
-            except gzip.BadGzipFile:
-                st.write(f"Error reading file {file_path}: not a gzipped file")
-        else:
-            st.write(f"Skipping file {file_path}: not a gzipped file")
-
-    unimod = pd.read_csv(unimod_path, sep="\t")
-    return data, unimod
-
-
-data_dict, unimod = load_data()
-if "data_dict" not in st.session_state:
-    st.session_state["data_dict"] = data_dict
-if "unimod" not in st.session_state:
-    st.session_state["unimod"] = unimod
 st.title("Welcome to lesSDRF")
 st.subheader("Spending less time on SDRF creates more time for amazing research")
 st.write(
-    """By providing metadata in a machine-readable format, other researchers can access your data more easily and you maximize its impact. 
-    The Sample and Data Relationship Format ([SDRF](https://www.nature.com/articles/s41467-021-26111-3)) is the HUPO-PSI recognized metadata format within proteomics. lesSDRF will streamline this annotation process for you. This tool is developed by the [CompOmics group](https://compomics.com/) and published in [Nature Communications](https://www.nature.com/articles/s41467-023-42543-5). \n""")
-st.write("""
-    On this homepage, select the species-specific default SDRF file that matches your study and provide the raw file names. 
-    Then, follow the steps in the sidebar.  
+    f"""By providing metadata in a machine-readable format, other researchers can access your data more easily and
+    you maximize its impact. The Sample and Data Relationship Format
+    ([SDRF](https://www.nature.com/articles/s41467-021-26111-3)) is the HUPO-PSI recognized metadata format within
+    proteomics. lesSDRF follows the [SDRF-Proteomics specification](https://sdrf.quantms.org/) {spec.SDRF_SPEC_VERSION}
+    and its templates, and validates your file with the official validator
+    ([sdrf-pipelines](https://github.com/bigbio/sdrf-pipelines)). This tool is developed by the
+    [CompOmics group](https://compomics.com/) and published in
+    [Nature Communications](https://www.nature.com/articles/s41467-023-42543-5)."""
+)
+st.write(
+    """On this page, choose the SDRF templates that match your study and provide the raw file names.
+Then follow the steps in the sidebar.
 - Step 1: If you have a local metadata file, you can upload it to map to the SDRF file
-- Step 2: Provide information on potential labels in your sample
+- Step 2: Provide information on labels (TMT, SILAC, ...) in your samples
 - Step 3: Fill in the columns that are required for a valid SDRF
-- Step 4: Fill in columns with additional information to further optimise your SDRF file  
-- Step 5: For atypical experiment types, you can check community suggested columns \n
-"""
+- Step 4: Fill in optional columns and factor values to further optimise your SDRF file
+- Step 5: Add templates for specific experiment types (DIA, single-cell, immunopeptidomics, ...)
+
+You can download your intermediate file at any time from the sidebar and continue later by uploading it here."""
 )
 
-st.markdown("""You are able to download your intermediate file at any given time, so you can come back to the other steps whenever suits you.  
-Upload your intermediate SDRF file here:""")
+with open(os.path.join(au.APP_DIR, "example_SDRF.tsv"), "rb") as fh:
+    st.download_button("Download an example SDRF file", fh.read(), file_name="example.sdrf.tsv",
+                       on_click="ignore", help="In need of some inspiration? This is what a finished SDRF looks like.")
 
-upload_df = st.file_uploader(
-    "Upload intermediate SDRF file", type=["tsv"], accept_multiple_files=False, help='Upload a previously saved SDRF file. It should be in tsv format and should not contain more than 500 samples'
-)
-if upload_df is not None:
-    template_df = pd.read_csv(upload_df, sep='\t')
-    if template_df.shape[0]>500:
-        st.error('Too many samples, please upload a maximum of 500 samples')
+# --------------------------------------------------------------------------------------
+st.header("1. Choose your templates")
+techs = spec.available(spec.TECHNOLOGY_TEMPLATES)
+current = spec.selected_templates()
+c1, c2 = st.columns(2)
+with c1:
+    tech = st.radio("Technology", techs, format_func=spec.TECHNOLOGY_TEMPLATES.get,
+                    index=next((techs.index(t) for t in current if t in techs), 0))
+with c2:
+    samples = spec.available(spec.SAMPLE_TEMPLATES)
+    sample = st.selectbox("Organism / sample type", samples, format_func=spec.SAMPLE_TEMPLATES.get,
+                          index=next((samples.index(t) for t in current if t in samples and t), 0),
+                          help="Determines organism-specific columns such as age and sex for human samples.")
+experiments = [t for t in spec.available(spec.EXPERIMENT_TEMPLATES)
+               if tech == "ms-proteomics" or t not in spec.MS_ONLY_TEMPLATES]
+chosen_experiments = st.multiselect(
+    "Experiment type(s) (optional)", experiments, format_func=spec.EXPERIMENT_TEMPLATES.get,
+    default=[t for t in current if t in experiments])
+templates = [tech] + ([sample] if sample else []) + chosen_experiments
+
+with st.expander("Columns in these templates"):
+    rules = spec.column_rules(templates)
+    st.dataframe(
+        pd.DataFrame([{"column": c, "requirement": rules[c].requirement,
+                       "templates": ", ".join(t for t in dict.fromkeys(rules[c].templates)
+                                              if t not in ("base", "sample-metadata"))}
+                      for c in spec.all_columns(templates)]),
+        hide_index=True, height=300)
+    st.caption("Required and recommended columns are added to your SDRF now; optional ones can be added in step 4.")
+
+if templates != current and au.get_df() is not None:
+    st.info("You changed the templates of your current SDRF.")
+    if st.button("Apply these templates to my current SDRF (adds any missing required/recommended columns)"):
+        st.session_state["templates"] = templates
+        au.save_df(au.ensure_columns(au.get_df(), spec.template_columns(templates)))
+        st.rerun()
+
+# --------------------------------------------------------------------------------------
+st.header("2. Start a new SDRF or continue a saved one")
+new_tab, upload_tab = st.tabs(["Start a new SDRF", "Continue with a saved SDRF"])
+
+with new_tab:
+    method = st.radio("How do you want to create your SDRF?", ["Enter raw file names", "Create empty rows"],
+                      horizontal=True)
+    files = []
+    if method == "Enter raw file names":
+        text = st.text_area(
+            "Raw file names, separated by commas, tabs or new lines (you can paste a column from a spreadsheet)",
+            help=f"The raw file names go into comment[data file] and are the basis of your SDRF file. "
+                 f"Maximum {au.MAX_FILES} files.")
+        if text:
+            parts = re.split(r"[,\t\r\n]+", text) if re.search(r"[,\t\r\n]", text) else text.split()
+            files = [p.strip() for p in parts if p.strip()]
+            dupes = sorted({f for f in files if files.count(f) > 1})
+            st.write(f"{len(files)} file(s)" + (f" — duplicates: {', '.join(dupes)}" if dupes else ""))
+        n_rows = len(files)
     else:
-        st.write(template_df)
-        st.session_state["template_df"] = template_df
+        n_rows = st.number_input("Number of empty rows", min_value=1, max_value=au.MAX_FILES, value=1)
 
-st.markdown("""In need of some inspiration? Download this example SDRF file to get an idea of the required output""")
-with open(f'{local_dir}/example_SDRF.tsv', 'rb') as f:
-    st.download_button("Download example SDRF", f, file_name="example.sdrf.tsv")
+    too_many = n_rows > au.MAX_FILES
+    if too_many:
+        st.error(f"Too many files, please enter a maximum of {au.MAX_FILES}.")
+    overwrite = True
+    if au.get_df() is not None:
+        overwrite = st.checkbox("Replace my current SDRF (it will be lost unless you downloaded it)")
+    if st.button("Create SDRF", type="primary", disabled=not n_rows or too_many or not overwrite):
+        columns = spec.template_columns(templates)
+        df = pd.DataFrame({c: [None] * int(n_rows) for c in columns})
+        if files:
+            df["comment[data file]"] = files
+        if "technology type" in df and tech in spec.TECHNOLOGY_TYPES:
+            df["technology type"] = spec.TECHNOLOGY_TYPES[tech]
+        if "characteristics[sample type]" in df:
+            df["characteristics[sample type]"] = "study sample"
+        st.session_state["templates"] = templates
+        au.save_df(df)
+        st.rerun()
 
-st.subheader("Start here with a completely new SDRF file")
-species = ["","human", "cell-line", "default", "invertebrates", "plants", "vertebrates"]
-selected_species = st.selectbox("""Select a species for the SDRF template which will contain the basic colummns to fill in for this specific species. 
-If your species is not in the drop down list, you can always use the default template.""", 
-species, help="This species selection will impact the default columns present in your SDRF template. You can always add more columns in step *Additional columns*.")
+with upload_tab:
+    upload = st.file_uploader("Upload an intermediate SDRF file (.tsv)", type=["tsv", "txt"],
+                              help=f"A previously saved SDRF file with at most {au.MAX_ROWS} rows")
+    if upload is not None:
+        try:
+            uploaded = spec.read_sdrf_upload(upload)
+        except Exception as exc:  # malformed upload
+            st.error(f"Could not read this file as a tab-separated SDRF: {exc}")
+            uploaded = None
+        if uploaded is not None and len(uploaded) > au.MAX_ROWS:
+            st.error(f"Too many rows, please upload a maximum of {au.MAX_ROWS}.")
+        elif uploaded is not None:
+            found = spec.templates_from_df(uploaded)
+            use = found or templates
+            st.write(f"{len(uploaded)} rows, {uploaded.shape[1]} columns. Templates: "
+                     + ", ".join(use) + (" (from the file)" if found else " (selected above)"))
+            st.dataframe(uploaded, hide_index=True, height=200)
+            # Older lesSDRF/SDRF versions used other names for these columns and values.
+            renames = {"comment[tool metadata]": None, "comment[depletion]": "characteristics[depletion]",
+                       "characteristics[strain/breed]": "characteristics[strain or breed]"}
+            if st.button("Use this file", type="primary"):
+                for old, new in renames.items():
+                    for col in [c for c in uploaded.columns if spec.base_name(c) == old]:
+                        if new is None:
+                            uploaded = uploaded.drop(columns=[col])
+                        else:
+                            uploaded = uploaded.rename(columns={col: col.replace(old, new)})
+                st.session_state["templates"] = use
+                au.save_df(uploaded)
+                st.rerun()
 
-if selected_species != "":
-    folder_path = os.path.join(local_dir, "templates")
-    # Load the corresponding CSV file based on the selected species
-    template_df = pd.read_csv(
-        f"{folder_path}/sdrf-{selected_species}.sdrf.tsv",
-        sep="\t",
-    )
-    template_df["comment[modification parameters]"] = np.nan
-    template_df["comment[fragment mass tolerance]"] = np.nan
-    template_df["comment[precursor mass tolerance]"] = np.nan
-
-    # Add radio button to choose between methods
-    input_method = st.radio(
-        "Choose how to create your template:",
-        ["Input raw file names", "Create empty rows"]
-    )
-
-    if input_method == "Input raw file names":
-        # Ask user to upload filenames of their samples
-        filenames = []
-        uploaded_names = st.text_input(
-            "Input raw file names as a comma or tab separated list", 
-            help="The raw file names will be input in the comment[data file] column and are the basis of your SDRF file. Input maximum 500 raw files"
-        )
-        if uploaded_names is not None:
-            #if comma separated, split on comma, if tab separated, split on tab
-            if "," in uploaded_names:
-                uploaded_names = uploaded_names.split(",")
-            elif "\t" in uploaded_names:
-                uploaded_names = uploaded_names.split("\t")
-            elif " " in uploaded_names:
-                uploaded_names = uploaded_names.split(" ")
-            else:
-                uploaded_names = [uploaded_names]
-            #remove trailing and leading spaces
-            uploaded_names = [name.strip() for name in uploaded_names]
-            filenames.append(uploaded_names)
-
-        if filenames and len(filenames[0]) > 500:
-            st.error('Too many samples, please upload a maximum of 500 samples')
-        elif filenames:
-            st.write(f"Added filenames: {filenames[0]}")
-            ## Store filenames in the dataframe
-            template_df["comment[data file]"] = filenames[0]
-            st.session_state["template_df"] = template_df
-
-    else:  # Create empty rows
-        n_rows = st.number_input(
-            "Number of empty rows to create",
-            min_value=1,
-            max_value=500,
-            value=1,
-            help="Choose how many empty rows to create in your template (maximum 500)"
-        )
-        # Create empty DataFrame with n rows
-        template_df = pd.DataFrame(
-            np.nan, 
-            index=range(n_rows),
-            columns=template_df.columns
-        )
-        st.write(f"Created template with {n_rows} empty rows")
-        st.session_state["template_df"] = template_df
-
-    ## Show the data in a table
-    st.write(template_df)
-    if "template_df" not in st.session_state:
-        st.session_state["template_df"] = template_df
-    with st.sidebar:
-        download = st.download_button("Press to download SDRF file",ParsingModule.convert_df(template_df), "intermediate_SDRF.sdrf.tsv", help="download your SDRF file")
-        st.write("""Please refer to your data and lesSDRF within your manuscript as follows:
-                 *The experimental metadata has been generated using lesSDRF and is available through ProteomeXchange with the dataset identifier [PXDxxxxxxx]*""")
+df = au.get_df()
+if df is not None:
+    au.show_df(df)
+au.sidebar_export()

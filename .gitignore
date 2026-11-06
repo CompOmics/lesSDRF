@@ -8,3 +8,6 @@ ontology/ms.owl
 ontology/efo.json
 ontology/ncbitaxon.obo
 ontology/ncbitaxon.owl
+# runtime leftovers
+__pycache__/
+temp_sdrf.tsv

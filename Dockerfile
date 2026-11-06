@@ -1,21 +1,14 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    git \
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN adduser --shell /bin/bash -uid 1002 app
-USER app
-COPY --chown=app:app requirements.txt requirements.txt
 
-USER root
-RUN pip3 install -U pip
-RUN pip3 install -r requirements.txt
+COPY requirements.txt requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 USER app
 COPY --chown=app:app . .

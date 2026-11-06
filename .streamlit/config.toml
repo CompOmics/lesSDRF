@@ -1,3 +1,12 @@
 [server]
-maxUploadSize = 1000
-maxMessageSize = 300
+# Uploads are metadata sheets and SDRF files: a few MB at most.
+maxUploadSize = 50
+# Ontology trees are pruned to ~1.5 MB before they are sent to the browser, so the default limit is plenty.
+maxMessageSize = 200
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+# Orange of the lesSDRF logo
+primaryColor = "#f79646"

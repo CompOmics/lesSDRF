@@ -1,120 +1,45 @@
 import streamlit as st
-import ParsingModule
-import pandas as pd
-import numpy as np
-import re
-from PIL import Image
-import base64
-import io
-import warnings
-warnings.filterwarnings("ignore")
 
-# Define the default button color (you can adjust this as desired)
-default_color = "#ffa478"
-# Define the button CSS styles
-button_styles = f"""
-    background-color: white;
-    color: {default_color};
-    border-radius: 20px;
-    padding: 10px 20px;
-    border: none;
-    text-align: center;
-    text-decoration: none;
-    display: inline-block;
-    font-size: 16px;
-    margin: 4px 2px;
-    cursor: pointer;
-"""
-# Define the button CSS styles when it's clicked
-clicked_styles = f"""
-    background-color: #ffa478;
-    color: white;
-"""
-st.set_page_config(
-    page_title="Experiment types",
-    layout="wide",
-    page_icon=":construction:",
-    menu_items={
-        "Get help": "https://github.com/compomics/lesSDRF/issues",
-        "Report a bug": "https://github.com/compomics/lesSDRF/issues",
-    },
-)
+import app_utils as au
+import spec
 
+au.setup_page("Experiment types")
+st.title("5. Experiment types")
+st.write("""Some experiment types need extra columns. The SDRF-Proteomics community maintains a template for each of
+them ([sdrf-templates](https://github.com/bigbio/sdrf-templates)). Adding a template adds its required and
+recommended columns to your SDRF; fill them in under step 3, and its optional columns under step 4.""")
 
-def add_logo(logo_path, width, height):
-    """Read and return a resized logo"""
-    logo = Image.open(logo_path)
-    modified_logo = logo.resize((width, height))
-    return modified_logo
+df = au.require_df()
+au.show_df(df)
+au.sidebar_export()
 
-def get_base64_image(image):
-    img_buffer = io.BytesIO()
-    image.save(img_buffer, format="PNG")
-    img_str = base64.b64encode(img_buffer.getvalue()).decode()
-    return img_str
+templates = spec.selected_templates()
+tech = next((t for t in templates if t in spec.TECHNOLOGY_TEMPLATES), "ms-proteomics")
+options = [t for t in spec.available(spec.EXPERIMENT_TEMPLATES)
+           if tech == "ms-proteomics" or t not in spec.MS_ONLY_TEMPLATES]
 
-my_logo = add_logo(logo_path="final_logo.png", width=149, height=58)
+for name in options:
+    active = name in templates
+    with st.container(border=True):
+        c1, c2 = st.columns([4, 1], vertical_alignment="center")
+        with c1:
+            st.markdown(f"**{spec.EXPERIMENT_TEMPLATES[name]}** · `{name} v{spec.template_version(name)}`"
+                        + (" · in use" if active else ""))
+            st.caption(spec.template_description(name))
+            own = [c for c in spec.template_columns([name], levels=("required", "recommended"))
+                   if c not in spec.template_columns([tech], levels=("required", "recommended", "optional"))]
+            if own:
+                st.caption("Adds: " + ", ".join(f"`{c}`" for c in own))
+        with c2:
+            if not active and st.button("Add", key=f"add_{name}", type="primary"):
+                new_templates = templates + [name]
+                st.session_state["templates"] = new_templates
+                au.save_df(au.ensure_columns(df, spec.template_columns(new_templates)))
+                st.rerun()
+            if active and st.button("Remove", key=f"rm_{name}"):
+                st.session_state["templates"] = [t for t in templates if t != name]
+                st.rerun()
 
-st.markdown(
-    f"""
-    <style>
-        [data-testid="stSidebarNav"] {{
-            background-image: url('data:image/png;base64,{get_base64_image(my_logo)}');
-            background-repeat: no-repeat;
-            background-position: 40px 20px;
-        }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-
-if "template_df" not in st.session_state:
-    st.error("No SDRF file was detected. Go to the Home page to select your template.", icon="🚨")  
-else:
-    template_df = st.session_state["template_df"] 
-    with st.container():
-        st.write("**This is your current SDRF file.**")
-        st.dataframe(template_df)
-
-
-def update_session_state(df):
-    st.session_state["template_df"] = df
-st.subheader(":construction: *Under development* :construction:")
-st.title("""5. Experiment types""")
-st.write(""" :rotating_light:
-This application is currently in development and the current page is not yet finalized. We are in touch with several members of the involved communities, 
-but we have not yet decided on a strict template. 
-If you would like to be a part of this discussion, please use the button in the sidebar to get involved.
-""")
-url = "https://github.com/bigbio/proteomics-sample-metadata/issues"
-button = f'<a href="{url}" style="{button_styles}" id="mybutton" onclick="document.getElementById(\'mybutton\').style.cssText = \'{clicked_styles}\'" target="_blank">Join the community effort</a>'
-with st.sidebar:
-    st.write(button, unsafe_allow_html=True)
-
-
-st.write("""Some experiment types have an atypical SDRF structure. Here you can find the community-suggested SDRF columns for such experiments.""")
-
-metaproteomics = st.button('Metaproteomics')
-single_cell = st.button('Single cell proteomics')
-immunopeptidomics = st.button('Immunopeptidomics')
-
-meta_proteomics_cols = ["characteristics[environmental material]", "characteristics[organism]", "characteristics[diet]", "characteristics[biome]", "characteristics[environmental condition]"]
-for button, suggested_cols in zip([metaproteomics], [meta_proteomics_cols]):
-    if button:
-        col1, col2 = st.columns(2)
-        #check which suggested cols are already in the template and which ones are not
-        detected_cols = [col for col in suggested_cols if col in template_df.columns]
-        cols_to_add = [col for col in suggested_cols if col not in template_df.columns]
-        for i in detected_cols:
-            with col1:
-                st.success(f"The suggested column **{i}** is already in your SDRF file.", icon="✅")
-        for i in cols_to_add:
-            with col1:
-                st.error(f"The suggested column **{i}** is not in your SDRF file. Do you want to add it?", icon="❌")
-        with col2:
-            st.write("Suggested columns:")
-            for c in cols_to_add:
-                st.checkbox(f"Add **{c}** to SDRF file", key=c)
-
+st.caption("Removing a template keeps the columns you already filled in; clear them in step 3 or 4 if needed.")
+st.markdown("Missing an experiment type? Join the discussion at "
+            "[proteomics-sample-metadata](https://github.com/bigbio/proteomics-sample-metadata/issues).")

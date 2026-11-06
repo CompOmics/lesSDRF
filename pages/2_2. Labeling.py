@@ -1,131 +1,54 @@
-import streamlit as st
-import warnings
-warnings.filterwarnings("ignore")
 import pandas as pd
-import numpy as np
-import re
-import ParsingModule
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
-from streamlit_tree_select import tree_select
-from collections import defaultdict
-from PIL import Image
-import base64
-import io
+import streamlit as st
 
-st.set_page_config(
-    page_title="Labeling",
-    layout="wide",
-    page_icon="🧪",
-    menu_items={
-        "Get help": "https://github.com/compomics/lesSDRF/issues",
-        "Report a bug": "https://github.com/compomics/lesSDRF/issues",
-    },
-)
+import app_utils as au
+import spec
 
-def add_logo(logo_path, width, height):
-    """Read and return a resized logo"""
-    logo = Image.open(logo_path)
-    modified_logo = logo.resize((width, height))
-    return modified_logo
-
-def get_base64_image(image):
-    img_buffer = io.BytesIO()
-    image.save(img_buffer, format="PNG")
-    img_str = base64.b64encode(img_buffer.getvalue()).decode()
-    return img_str
-
-my_logo = add_logo(logo_path="final_logo.png", width=149, height=58)
-
-st.markdown(
-    f"""
-    <style>
-        [data-testid="stSidebarNav"] {{
-            background-image: url('data:image/png;base64,{get_base64_image(my_logo)}');
-            background-repeat: no-repeat;
-            background-position: 40px 20px;
-        }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
+au.setup_page("Labeling")
 st.title("2. Labeling")
-st.markdown(
-    """If a raw file contains multiple labels, every label will need to be annotated on a different row. Here you can map label information to your raw files. 
-    As a result, the raw file information will be duplicated with the correct label filled in"""
-)
+st.markdown("""If a raw file contains several labels (e.g. TMT channels or SILAC heavy/light), every label is
+annotated on its own row. Select the labels used in your experiment and the files they occur in; the rows of those
+files are then duplicated, one per label. For label-free data, select *label free sample*.""")
 
-data_dict = st.session_state["data_dict"]
-# Get filled in template_df from other page
-# if template_df is not in the session state, don't run all the code below
-if "template_df" not in st.session_state:
-    st.error("Please fill in the template file in the Home page first", icon="🚨")  
+df = au.require_df()
+au.show_df(df)
+au.sidebar_export()
+
+if "comment[data file]" not in df.columns or spec.is_empty_column(df, "comment[data file]"):
+    st.warning("Fill in comment[data file] first (on the Home page or in step 3).")
     st.stop()
-else:
-    template_df = st.session_state["template_df"] 
-    st.write("**This is your current SDRF file.**")
-    st.write(template_df)
 
-if "all_selected_labels" not in st.session_state:
-    st.session_state["all_selected_labels"] = []
+labels = au.term_picker("labeling", "all_label_elements", "label_nodes", label="label")
+files = list(dict.fromkeys(df["comment[data file]"].dropna().tolist()))
 
-with st.sidebar:
-    download = st.download_button("Press to download SDRF file",ParsingModule.convert_df(template_df), "intermediate_SDRF.sdrf.tsv", help="download your SDRF file")
-    st.write("""Please refer to your data and lesSDRF within your manuscript as follows:
-                 *The experimental metadata has been generated using lesSDRF and is available through ProteomeXchange with the dataset identifier [PXDxxxxxxx]*""")
-#first select the labels
-st.write("Input the label that was used in your experiment. If no label was added, indicate this using *label free sample*.")
-all_label_elements = data_dict["all_label_elements"]
-label_nodes = data_dict["label_nodes"]
-with st.form("Select here your ontology terms using the autocomplete function or the ontology-based tree menu", clear_on_submit=True):
-    col1, col2 = st.columns(2)
-    with col1:
-        # selectbox with search option
-        all_label_elements.append(" ")
-        all_label_elements = set(all_label_elements)
-        return_search = st.multiselect(
-            "Select your matching ontology term using this autocomplete function",
-            all_label_elements)
-    with col2:
-        st.write("Or follow the ontology based drop down menu below")
-        return_select = tree_select(label_nodes, no_cascade=True, expand_on_click=True, check_model="leaf")
-    all_selected_labels = return_search + return_select["checked"]
-    all_selected_labels = [i.split(',')[-1] for i in all_selected_labels if i is not None]
-    s = st.form_submit_button("Submit selection")
-    if s:
-        st.write(f"Selection contains: {all_selected_labels}")
-        st.session_state["all_selected_labels"] = all_selected_labels
-#match filenames to labels
-st.write("Match the filenames to the labels you selected above. Select ALL if the label is found in all raw files.")
-label_dict = defaultdict(list)
-for label in all_selected_labels:
-    selected_files = st.multiselect(f"Select files labeled with {label}.", ["ALL"] + template_df["comment[data file]"].values.tolist(), key=f"selected_label_{label}")
-    for i in selected_files:
-        label_dict[i].append(label)
-ready = st.checkbox('Ready?')
-# based on the label_dict, duplicate rows with comment[data file] in the keys of the lable_dict
-# duplicate the row with each row having one of the labels in the characteristics[label] column that is in the value of the label_dict
-# if the key is ALL, duplicate the row for each label from the all_selected_labels list
+assignment = {}
+if labels:
+    st.write("Select the files that contain each label. Choose **ALL** if the label is in every file.")
+    for label in labels:
+        chosen = st.multiselect(f"Files labeled with **{label}**", ["ALL"] + files, key=f"label_files_{label}")
+        assignment[label] = files if "ALL" in chosen else chosen
 
-if ready:
-    #first get the rows that need to be duplicated
-    new_rows = []
-    all_selected_labels = st.session_state["all_selected_labels"]
-    for filename, label_list in label_dict.items():
-        if filename == "ALL":
-            rows_to_add = template_df.copy()
-        else:
-            rows_to_add = template_df[template_df["comment[data file]"] == filename]
-        label_idx = 0
-        n = len(label_list)
-        for i in range(n):
-            new_row = rows_to_add.copy()
-            new_row["comment[label]"] = label_list[label_idx]
-            label_idx += 1
-            new_rows.append(new_row)
-    template_df = pd.concat(new_rows, ignore_index=True)
-    template_df = template_df.sort_values(by='comment[data file]')
-    st.write("SDRF file with label information")
-    st.dataframe(template_df)
-    st.session_state["template_df"] = template_df
+if assignment and any(assignment.values()):
+    labels_of = {f: [lab for lab in labels if f in assignment.get(lab, [])] for f in files}
+    n_new = sum(max(len(labels_of.get(f, [])), 1) for f in df["comment[data file]"].tolist())
+    unlabeled = [f for f, labs in labels_of.items() if not labs]
+    if unlabeled:
+        st.info(f"{len(unlabeled)} file(s) have no label selected and keep their current label: "
+                + ", ".join(unlabeled[:10]) + (" ..." if len(unlabeled) > 10 else ""))
+    st.write(f"Your SDRF will have **{n_new}** rows.")
+    if n_new > au.MAX_ROWS:
+        st.error(f"That is more than the maximum of {au.MAX_ROWS} rows.")
+    elif st.button("Apply labels", type="primary"):
+        rows = []
+        for _, row in df.iterrows():
+            labs = labels_of.get(row["comment[data file]"], [])
+            for lab in labs or [None]:
+                new = row.copy()
+                if lab is not None:
+                    new["comment[label]"] = au.with_accession("comment[label]", lab)
+                rows.append(new)
+        out = pd.DataFrame(rows).reset_index(drop=True)
+        out = out.sort_values("comment[data file]", kind="stable").reset_index(drop=True)
+        au.save_df(out)
+        st.success("Labels added. Remember that source name + assay name + label must be unique per row.")
+        st.rerun()

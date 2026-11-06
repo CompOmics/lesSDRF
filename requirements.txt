@@ -1,10 +1,7 @@
-pronto== 2.5.3
-streamlit==1.19.0
-streamlit-aggrid==0.3.4.post3
+# lesSDRF app (Python >= 3.10, tested with 3.11)
+streamlit==1.67.0
 streamlit-tree-select==0.0.5
-jsonschema==4.17.0
-zipp==3.10.0
-openpyxl== 3.1.1
-altair==4.0
-sdrf-pipelines==0.0.23
-#command line to check streamlit version in pip
+sdrf-pipelines==0.1.7
+pandas==3.1.1
+openpyxl==3.1.5
+# The ontology-parsing notebooks (not the app) additionally need: pronto
