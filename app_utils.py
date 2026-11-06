@@ -124,7 +124,7 @@ def require_df() -> pd.DataFrame:
 
 def show_df(df: pd.DataFrame, title="**This is your current SDRF file.**"):
     st.write(title)
-    st.dataframe(df, hide_index=True, height=min(35 * (len(df) + 1) + 3, 280))
+    st.dataframe(df.fillna(""), hide_index=True, height=min(35 * (len(df) + 1) + 3, 280))  # blank, not "None"
 
 
 # --------------------------------------------------------------------------------------

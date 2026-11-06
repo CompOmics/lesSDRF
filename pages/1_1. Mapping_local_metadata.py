@@ -189,7 +189,9 @@ def render_highlights(text: str, hits: list[dict], status: dict, focus: set) -> 
         out.append(f'<mark class="{cls}" title="{html.escape(title)}">{html.escape(text[a:b])}</mark>')
         pos = b
     out.append(html.escape(text[pos:]))
-    script = "<script>const f=document.querySelector('mark.focus');if(f){f.scrollIntoView({block:'center'});}</script>"
+    # Scroll only the text panel itself (scrollIntoView would also scroll the page around it).
+    script = ("<script>const f=document.querySelector('mark.focus');"
+              "if(f){window.scrollTo(0, Math.max(0, f.offsetTop - window.innerHeight / 3));}</script>")
     return HIGHLIGHT_CSS + f'<div class="text">{"".join(out)}</div>' + script
 
 
@@ -281,11 +283,11 @@ def text_tab():
 
     table = pd.DataFrame([{
         "status": STATUS_LABELS[status.get(h["id"], "pending")],
+        "confidence": h["confidence"],
         "SDRF column": h["column"],
         "value": h["value"],
-        "confidence": h["confidence"],
-        "mentions": h["count"],
         "found as": h["found"] or "(inferred)",
+        "mentions": h["count"],
     } for h in visible])
 
     left, right = st.columns([5, 4])
@@ -295,10 +297,12 @@ def text_tab():
         # makes sure an old selection never lands on other suggestions.
         table_key = "tm_table_" + str(abs(hash(tuple((h["id"], status.get(h["id"], "")) for h in visible))))
         event = st.dataframe(
-            table, hide_index=True, on_select="rerun", selection_mode="multi-row", key=table_key, height=460,
+            table, hide_index=True, on_select="rerun", selection_mode="multi-row", key=table_key,
+            height=min(35 * (len(table) + 1) + 3, 460),
             column_config={
+                "status": st.column_config.TextColumn("status", width="small"),
                 "confidence": st.column_config.ProgressColumn("confidence", min_value=0.0, max_value=1.0,
-                                                              format="percent", color="#f79646"),
+                                                              format="percent", color="#f79646", width="small"),
                 "mentions": st.column_config.NumberColumn("mentions", width="small"),
             })
         selected = [visible[i]["id"] for i in event.selection.rows if i < len(visible)]

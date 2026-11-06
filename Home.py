@@ -85,6 +85,7 @@ with new_tab:
     if method == "Enter raw file names":
         text = st.text_area(
             "Raw file names, separated by commas, tabs or new lines (you can paste a column from a spreadsheet)",
+            height=180,
             help=f"The raw file names go into comment[data file] and are the basis of your SDRF file. "
                  f"Maximum {au.MAX_FILES} files.")
         if text:
